@@ -1,0 +1,21 @@
+[project]
+name = "mcap-extractor"
+version = "0.1.0"
+description = ""
+authors = [
+    {name = "Vsevolod Hulchuk", email = "hulchvse@student.cvut.cz"}
+]
+requires-python = ">=3.11"
+dependencies = [
+    "mcap (>=1.4.0,<2.0.0)",
+    "mcap-ros2-support (>=0.5.7,<0.6.0)",
+    "matplotlib (>=3.11.0,<4.0.0)"
+]
+
+[project.scripts]
+extract_data = "mcap_extractor.extract_tum:main"
+align_visualize = "mcap_extractor.align_visualize:main"
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
