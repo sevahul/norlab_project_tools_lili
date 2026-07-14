@@ -6,6 +6,11 @@ trajectories:
   theodolite:
     topic: /theodolite_data
     type: theodolite
+  base_tf:
+    topic: /tf
+    type: tf_tree
+    child_frame: base
+    parent_frame: odom
 
 # Optional overrides:
 # output:

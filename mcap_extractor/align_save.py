@@ -1,8 +1,10 @@
+import argparse
 import json
 import sys
 from pathlib import Path
 
 import numpy as np
+import yaml
 
 # Hardcoded alignment method.
 # Available modes: "se2_full", "start_then_rot"
@@ -13,6 +15,7 @@ APPLY_Z_OFFSET = False
 
 # Prefer this trajectory name as ground truth reference when available.
 REFERENCE_NAME = "theodolite_trajectory"
+DEFAULT_CONFIG_PATH = Path("config/default.yaml")
 
 
 def load_tum(filepath):
@@ -86,7 +89,51 @@ def apply_transform_xyz(xyz, r_2d, t_2d, z_offset=0.0):
     return np.column_stack((xy_aligned, z_aligned))
 
 
-def align_folder(run_folder):
+def get_reference_from_config(config_path):
+    path = Path(config_path)
+    if not path.is_file():
+        print(f"Error: Missing config file: {path}", file=sys.stderr)
+        sys.exit(1)
+
+    with open(path, "r") as f:
+        cfg = yaml.safe_load(f) or {}
+
+    trajectories = cfg.get("trajectories") or {}
+    if not isinstance(trajectories, dict):
+        print("Error: config 'trajectories' must be a mapping.", file=sys.stderr)
+        sys.exit(1)
+
+    explicit_refs = []
+    theodolite_fallback = None
+
+    for name, spec in trajectories.items():
+        if not isinstance(spec, dict):
+            continue
+
+        if spec.get("reference") is True:
+            explicit_refs.append(name)
+
+        if theodolite_fallback is None and spec.get("type") == "theodolite":
+            theodolite_fallback = name
+
+    if len(explicit_refs) > 1:
+        joined = ", ".join(explicit_refs)
+        print(
+            f"Error: Only one trajectory can have reference=true. Found: {joined}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    if len(explicit_refs) == 1:
+        return f"{explicit_refs[0]}_trajectory", "config_reference"
+
+    if theodolite_fallback is not None:
+        return f"{theodolite_fallback}_trajectory", "theodolite_fallback"
+
+    return None, "none"
+
+
+def align_folder(run_folder, config_path=DEFAULT_CONFIG_PATH):
     run_dir = Path(run_folder)
     if not run_dir.is_dir():
         print(f"Error: {run_folder} is not a valid directory.", file=sys.stderr)
@@ -116,12 +163,28 @@ def align_folder(run_folder):
         print("Error: No valid trajectory data loaded.", file=sys.stderr)
         sys.exit(1)
 
-    ref_name = REFERENCE_NAME if REFERENCE_NAME in trajectories else next(iter(trajectories))
+    configured_ref_name, ref_source = get_reference_from_config(config_path)
+
+    if ref_source == "config_reference" and configured_ref_name not in trajectories:
+        print(
+            f"Error: Config reference trajectory '{configured_ref_name}' not found in {unaligned_dir}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    if configured_ref_name in trajectories:
+        ref_name = configured_ref_name
+    else:
+        ref_source = "legacy_fallback"
+        ref_name = REFERENCE_NAME if REFERENCE_NAME in trajectories else next(iter(trajectories))
+
     ref = trajectories[ref_name]
 
     metadata = {
         "alignment_mode": ALIGNMENT_MODE,
         "reference": ref_name,
+        "reference_selection": ref_source,
+        "config_path": str(Path(config_path).resolve()),
         "entries": [],
     }
 
@@ -193,12 +256,16 @@ def align_folder(run_folder):
 
 
 def main():
-    if len(sys.argv) < 2:
-        print("Usage: poetry run align_data <output_run_folder>")
-        print("Example: poetry run align_data output/my_bag")
-        sys.exit(1)
+    parser = argparse.ArgumentParser(description="Align extracted trajectories in a run folder.")
+    parser.add_argument("run_folder", help="Path to output run folder, for example: output/my_bag")
+    parser.add_argument(
+        "--config",
+        default=str(DEFAULT_CONFIG_PATH),
+        help="Path to YAML config file (default: config/default.yaml).",
+    )
+    args = parser.parse_args()
 
-    align_folder(sys.argv[1])
+    align_folder(args.run_folder, config_path=args.config)
 
 
 if __name__ == "__main__":

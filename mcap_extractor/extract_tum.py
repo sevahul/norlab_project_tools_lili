@@ -13,6 +13,7 @@ DEFAULT_TYPE = "odometry"
 DEFAULT_TIMESTAMP_BY_TYPE = {
     "odometry": "header",
     "theodolite": "arrival",
+    "tf_tree": "header",
 }
 
 
@@ -63,6 +64,18 @@ def load_config(config_path):
             "timestamp_source": timestamp_source,
         }
 
+        if traj_type == "tf_tree":
+            child_frame = spec.get("child_frame")
+            if not child_frame:
+                print(
+                    f"Error: trajectory '{name}' of type 'tf_tree' requires 'child_frame'.",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+
+            normalized[name]["parent_frame"] = spec.get("parent_frame", "odom")
+            normalized[name]["child_frame"] = child_frame
+
     return cfg, normalized
 
 
@@ -100,6 +113,21 @@ def get_timestamp(msg, topic, timestamp_source):
         return None
 
 
+def get_tf_timestamp(msg, topic, timestamp_source, transform_stamped):
+    if timestamp_source == "arrival":
+        return msg.log_time.timestamp()
+
+    try:
+        sec = transform_stamped.header.stamp.sec
+        nanosec = transform_stamped.header.stamp.nanosec
+        return sec + (nanosec * 1e-9)
+    except AttributeError:
+        print(
+            f"Warning: TF transform on {topic} missing header.stamp. Skipping transform.",
+        )
+        return None
+
+
 def trajectory_output_path(name, traj_type, unaligned_dir, raw_dir):
     if traj_type == "theodolite":
         raw_name = "theodolite_raw.txt" if name == "theodolite" else f"{name}_raw.txt"
@@ -113,12 +141,14 @@ def extract_trajectories(mcap_file=None, output_root=None, config_path=DEFAULT_C
     cfg, trajectories = load_config(config_path)
     mcap_path, output_dir, unaligned_dir, raw_dir = resolve_paths(cfg, mcap_file, output_root)
 
-    topic_to_name = {}
-    topic_list = []
+    topic_to_names = {}
     for name, spec in trajectories.items():
         topic = spec["topic"]
-        topic_to_name[topic] = name
-        topic_list.append(topic)
+        if topic not in topic_to_names:
+            topic_to_names[topic] = []
+        topic_to_names[topic].append(name)
+
+    topic_list = list(topic_to_names.keys())
 
     out_files = {}
     writers = {}
@@ -148,33 +178,60 @@ def extract_trajectories(mcap_file=None, output_root=None, config_path=DEFAULT_C
         try:
             for msg in read_ros2_messages(str(mcap_path), topics=topic_list):
                 topic = msg.channel.topic
-                name = topic_to_name.get(topic)
-                if name is None:
+                names = topic_to_names.get(topic)
+                if not names:
                     continue
-
-                spec = trajectories[name]
                 ros_msg = msg.ros_msg
-                timestamp = get_timestamp(msg, topic, spec["timestamp_source"])
-                if timestamp is None:
-                    continue
 
-                if spec["type"] == "odometry":
-                    position = ros_msg.pose.pose.position
-                    orientation = ros_msg.pose.pose.orientation
-                    line = (
-                        f"{timestamp:.9f} {position.x} {position.y} {position.z} "
-                        f"{orientation.x} {orientation.y} {orientation.z} {orientation.w}\n"
-                    )
-                    writers[name].write(line)
-                elif spec["type"] == "theodolite":
-                    if ros_msg.status != 0:
+                for name in names:
+                    spec = trajectories[name]
+
+                    if spec["type"] == "tf_tree":
+                        for transform_stamped in getattr(ros_msg, "transforms", []):
+                            if transform_stamped.header.frame_id != spec["parent_frame"]:
+                                continue
+                            if transform_stamped.child_frame_id != spec["child_frame"]:
+                                continue
+
+                            timestamp = get_tf_timestamp(
+                                msg,
+                                topic,
+                                spec["timestamp_source"],
+                                transform_stamped,
+                            )
+                            if timestamp is None:
+                                continue
+
+                            translation = transform_stamped.transform.translation
+                            rotation = transform_stamped.transform.rotation
+                            line = (
+                                f"{timestamp:.9f} {translation.x} {translation.y} {translation.z} "
+                                f"{rotation.x} {rotation.y} {rotation.z} {rotation.w}\n"
+                            )
+                            writers[name].write(line)
                         continue
 
-                    azimuth = ros_msg.azimuth
-                    elevation = ros_msg.elevation
-                    distance = ros_msg.distance
-                    line = f"{timestamp:.9f} {azimuth} {elevation} {distance}\n"
-                    writers[name].write(line)
+                    timestamp = get_timestamp(msg, topic, spec["timestamp_source"])
+                    if timestamp is None:
+                        continue
+
+                    if spec["type"] == "odometry":
+                        position = ros_msg.pose.pose.position
+                        orientation = ros_msg.pose.pose.orientation
+                        line = (
+                            f"{timestamp:.9f} {position.x} {position.y} {position.z} "
+                            f"{orientation.x} {orientation.y} {orientation.z} {orientation.w}\n"
+                        )
+                        writers[name].write(line)
+                    elif spec["type"] == "theodolite":
+                        if ros_msg.status != 0:
+                            continue
+
+                        azimuth = ros_msg.azimuth
+                        elevation = ros_msg.elevation
+                        distance = ros_msg.distance
+                        line = f"{timestamp:.9f} {azimuth} {elevation} {distance}\n"
+                        writers[name].write(line)
 
         except Exception as e:
             print(f"An error occurred while parsing the MCAP file: {e}")

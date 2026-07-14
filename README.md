@@ -52,6 +52,22 @@ Notes:
 - CLI MCAP input path overrides `input` from YAML.
 - Positional `output` path overrides `output.folder` from YAML.
 - Any number of trajectories can be configured under `trajectories`.
+- Supported trajectory types:
+	- `odometry` (default): reads pose from `pose.pose`.
+	- `theodolite`: saves raw spherical data then converts to trajectory.
+	- `tf_tree`: extracts transforms from TF by frame pair (`parent_frame`, `child_frame`).
+
+Minimal `tf_tree` example:
+
+```yaml
+trajectories:
+	base_link_tf:
+		topic: /tf
+		type: tf_tree
+		child_frame: base_link
+		# optional, defaults to odom
+		parent_frame: odom
+```
 
 This generates:
 
@@ -70,6 +86,31 @@ output/<bag-name>/
 ```bash
 cd /home/seva/repos/deg-tunnel-tools
 poetry run align_data output/<bag-name>
+```
+
+Optional custom config for reference selection:
+
+```bash
+poetry run align_data output/<bag-name> --config config/default.yaml
+```
+
+Reference selection rules for alignment:
+
+- Set one trajectory with `reference: true` under `trajectories` in YAML.
+- Exactly one `reference: true` is allowed.
+- If no explicit reference is set, alignment falls back to the first trajectory of type `theodolite`.
+- If no theodolite trajectory exists in config, alignment falls back to legacy behavior.
+
+Example:
+
+```yaml
+trajectories:
+	legged:
+		topic: /legged_odometry/pose_in_odom
+	theodolite:
+		topic: /theodolite_data
+		type: theodolite
+		reference: true
 ```
 
 This generates:
