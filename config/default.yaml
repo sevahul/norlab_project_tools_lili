@@ -1,0 +1,13 @@
+trajectories:
+  t265:
+    topic: /t265/odom/sample
+  legged:
+    topic: /legged_odometry/pose_in_odom
+  theodolite:
+    topic: /theodolite_data
+    type: theodolite
+
+# Optional overrides:
+# output:
+#   folder: output/non-default
+# input: /path/to/file.mcap
