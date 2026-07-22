@@ -1,21 +1,18 @@
-import argparse
 import json
 import sys
 from pathlib import Path
 
 import numpy as np
-import yaml
 
 # Hardcoded alignment method.
 # Available modes: "se2_full", "start_then_rot"
-ALIGNMENT_MODE = "se2_full"
+ALIGNMENT_MODE = "start_then_rot"
 
 # If True, apply a constant z offset based on the first overlapping synchronized sample.
 APPLY_Z_OFFSET = False
 
 # Prefer this trajectory name as ground truth reference when available.
 REFERENCE_NAME = "theodolite_trajectory"
-DEFAULT_CONFIG_PATH = Path("config/default.yaml")
 
 
 def load_tum(filepath):
@@ -59,7 +56,13 @@ def get_best_rotation_2d(ref_xy, est_xy):
     return r
 
 
-def compute_transform(ref_sync_xyz, est_sync_xyz, mode):
+def closest_sample_to_time(ts, xyz, target_t):
+    """Return index, timestamp and xyz of the sample closest to target_t."""
+    idx = int(np.argmin(np.abs(ts - target_t)))
+    return idx, float(ts[idx]), xyz[idx]
+
+
+def compute_transform(ref_sync_xyz, est_sync_xyz, mode, ref_anchor_xy=None, est_anchor_xy=None):
     ref_xy = ref_sync_xyz[:, :2]
     est_xy = est_sync_xyz[:, :2]
 
@@ -71,12 +74,15 @@ def compute_transform(ref_sync_xyz, est_sync_xyz, mode):
         r = get_best_rotation_2d(ref_zero, est_zero)
         t = ref_centroid - (r @ est_centroid)
     elif mode == "start_then_rot":
-        ref_start = ref_xy[0]
-        est_start = est_xy[0]
-        ref_zero = ref_xy - ref_start
-        est_zero = est_xy - est_start
+        if ref_anchor_xy is None:
+            ref_anchor_xy = ref_xy[0]
+        if est_anchor_xy is None:
+            est_anchor_xy = est_xy[0]
+
+        ref_zero = ref_xy - ref_anchor_xy
+        est_zero = est_xy - est_anchor_xy
         r = get_best_rotation_2d(ref_zero, est_zero)
-        t = ref_start - (r @ est_start)
+        t = ref_anchor_xy - (r @ est_anchor_xy)
     else:
         raise ValueError(f"Unsupported ALIGNMENT_MODE: {mode}")
 
@@ -89,51 +95,7 @@ def apply_transform_xyz(xyz, r_2d, t_2d, z_offset=0.0):
     return np.column_stack((xy_aligned, z_aligned))
 
 
-def get_reference_from_config(config_path):
-    path = Path(config_path)
-    if not path.is_file():
-        print(f"Error: Missing config file: {path}", file=sys.stderr)
-        sys.exit(1)
-
-    with open(path, "r") as f:
-        cfg = yaml.safe_load(f) or {}
-
-    trajectories = cfg.get("trajectories") or {}
-    if not isinstance(trajectories, dict):
-        print("Error: config 'trajectories' must be a mapping.", file=sys.stderr)
-        sys.exit(1)
-
-    explicit_refs = []
-    theodolite_fallback = None
-
-    for name, spec in trajectories.items():
-        if not isinstance(spec, dict):
-            continue
-
-        if spec.get("reference") is True:
-            explicit_refs.append(name)
-
-        if theodolite_fallback is None and spec.get("type") == "theodolite":
-            theodolite_fallback = name
-
-    if len(explicit_refs) > 1:
-        joined = ", ".join(explicit_refs)
-        print(
-            f"Error: Only one trajectory can have reference=true. Found: {joined}",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    if len(explicit_refs) == 1:
-        return f"{explicit_refs[0]}_trajectory", "config_reference"
-
-    if theodolite_fallback is not None:
-        return f"{theodolite_fallback}_trajectory", "theodolite_fallback"
-
-    return None, "none"
-
-
-def align_folder(run_folder, config_path=DEFAULT_CONFIG_PATH):
+def align_folder(run_folder):
     run_dir = Path(run_folder)
     if not run_dir.is_dir():
         print(f"Error: {run_folder} is not a valid directory.", file=sys.stderr)
@@ -163,28 +125,12 @@ def align_folder(run_folder, config_path=DEFAULT_CONFIG_PATH):
         print("Error: No valid trajectory data loaded.", file=sys.stderr)
         sys.exit(1)
 
-    configured_ref_name, ref_source = get_reference_from_config(config_path)
-
-    if ref_source == "config_reference" and configured_ref_name not in trajectories:
-        print(
-            f"Error: Config reference trajectory '{configured_ref_name}' not found in {unaligned_dir}",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    if configured_ref_name in trajectories:
-        ref_name = configured_ref_name
-    else:
-        ref_source = "legacy_fallback"
-        ref_name = REFERENCE_NAME if REFERENCE_NAME in trajectories else next(iter(trajectories))
-
+    ref_name = REFERENCE_NAME if REFERENCE_NAME in trajectories else next(iter(trajectories))
     ref = trajectories[ref_name]
 
     metadata = {
         "alignment_mode": ALIGNMENT_MODE,
         "reference": ref_name,
-        "reference_selection": ref_source,
-        "config_path": str(Path(config_path).resolve()),
         "entries": [],
     }
 
@@ -204,6 +150,14 @@ def align_folder(run_folder, config_path=DEFAULT_CONFIG_PATH):
         if name == ref_name:
             continue
 
+        # Align starts using the trajectory sample closest in time to the
+        # first reference timestamp.
+        _, closest_est_ts, closest_est_xyz = closest_sample_to_time(
+            traj["ts"], traj["xyz"], ref["ts"][0]
+        )
+        ref_anchor_xy = ref["xyz"][0, :2]
+        est_anchor_xy = closest_est_xyz[:2]
+
         interp_est = interp_xyz(ref["ts"], traj["ts"], traj["xyz"])
         valid = ~np.isnan(interp_est[:, 0])
 
@@ -220,7 +174,13 @@ def align_folder(run_folder, config_path=DEFAULT_CONFIG_PATH):
         ref_sync = ref["xyz"][valid]
         est_sync = interp_est[valid]
 
-        r, t = compute_transform(ref_sync, est_sync, ALIGNMENT_MODE)
+        r, t = compute_transform(
+            ref_sync,
+            est_sync,
+            ALIGNMENT_MODE,
+            ref_anchor_xy=ref_anchor_xy,
+            est_anchor_xy=est_anchor_xy,
+        )
 
         z_offset = 0.0
         if APPLY_Z_OFFSET:
@@ -237,6 +197,8 @@ def align_folder(run_folder, config_path=DEFAULT_CONFIG_PATH):
                 "source": str((unaligned_dir / f"{name}.txt").resolve()),
                 "output": str(out_path.resolve()),
                 "overlap_samples": int(valid.sum()),
+                "ref_start_ts": float(ref["ts"][0]),
+                "est_closest_start_ts": float(closest_est_ts),
                 "rotation": [[float(r[0, 0]), float(r[0, 1])], [float(r[1, 0]), float(r[1, 1])]],
                 "translation_xy": [float(t[0]), float(t[1])],
                 "z_offset": float(z_offset),
@@ -256,16 +218,12 @@ def align_folder(run_folder, config_path=DEFAULT_CONFIG_PATH):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Align extracted trajectories in a run folder.")
-    parser.add_argument("run_folder", help="Path to output run folder, for example: output/my_bag")
-    parser.add_argument(
-        "--config",
-        default=str(DEFAULT_CONFIG_PATH),
-        help="Path to YAML config file (default: config/default.yaml).",
-    )
-    args = parser.parse_args()
+    if len(sys.argv) < 2:
+        print("Usage: poetry run align_data <output_run_folder>")
+        print("Example: poetry run align_data output/my_bag")
+        sys.exit(1)
 
-    align_folder(args.run_folder, config_path=args.config)
+    align_folder(sys.argv[1])
 
 
 if __name__ == "__main__":

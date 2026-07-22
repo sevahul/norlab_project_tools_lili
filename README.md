@@ -6,6 +6,7 @@ This workspace now supports a 4-command workflow:
 3. `eval_metrics` computes translation-only ATE/RPE metrics from saved aligned trajectories.
 4. `align_visualize` visualizes already saved aligned trajectories.
 5. `visualize_metrics` renders dedicated metrics figures from `aligned/` and `metrics/`.
+6. `run_pipeline` runs alignment, aligned visualization, metrics evaluation, and metrics visualization from `unaligned/`.
 
 ## Dependencies
 
@@ -33,42 +34,6 @@ cd /home/seva/repos/deg-tunnel-tools
 poetry run extract_data <path_to_mcap_file>
 ```
 
-Extraction topic settings are loaded from [config/default.yaml](config/default.yaml).
-
-Optional custom config:
-
-```bash
-poetry run extract_data <path_to_mcap_file> --config config/default.yaml
-```
-
-Optional output root override:
-
-```bash
-poetry run extract_data <path_to_mcap_file> output
-```
-
-Notes:
-
-- CLI MCAP input path overrides `input` from YAML.
-- Positional `output` path overrides `output.folder` from YAML.
-- Any number of trajectories can be configured under `trajectories`.
-- Supported trajectory types:
-	- `odometry` (default): reads pose from `pose.pose`.
-	- `theodolite`: saves raw spherical data then converts to trajectory.
-	- `tf_tree`: extracts transforms from TF by frame pair (`parent_frame`, `child_frame`).
-
-Minimal `tf_tree` example:
-
-```yaml
-trajectories:
-	base_link_tf:
-		topic: /tf
-		type: tf_tree
-		child_frame: base_link
-		# optional, defaults to odom
-		parent_frame: odom
-```
-
 This generates:
 
 ```text
@@ -86,31 +51,6 @@ output/<bag-name>/
 ```bash
 cd /home/seva/repos/deg-tunnel-tools
 poetry run align_data output/<bag-name>
-```
-
-Optional custom config for reference selection:
-
-```bash
-poetry run align_data output/<bag-name> --config config/default.yaml
-```
-
-Reference selection rules for alignment:
-
-- Set one trajectory with `reference: true` under `trajectories` in YAML.
-- Exactly one `reference: true` is allowed.
-- If no explicit reference is set, alignment falls back to the first trajectory of type `theodolite`.
-- If no theodolite trajectory exists in config, alignment falls back to legacy behavior.
-
-Example:
-
-```yaml
-trajectories:
-	legged:
-		topic: /legged_odometry/pose_in_odom
-	theodolite:
-		topic: /theodolite_data
-		type: theodolite
-		reference: true
 ```
 
 This generates:
@@ -161,13 +101,25 @@ Optional interactive display:
 poetry run visualize_metrics output/<bag-name> --show
 ```
 
-Optional spatial RPE highlight delta (default is 10 m):
+Optional local-metrics delta in meters (RPE/DTE/distance-ratio):
 
 ```bash
 poetry run visualize_metrics output/<bag-name> --highlight-delta 10
 ```
 
+Optional local pair selection mode (default is non-intersecting/consecutive pairs):
+
+```bash
+poetry run visualize_metrics output/<bag-name> --pair-selection non_intersecting
+poetry run visualize_metrics output/<bag-name> --pair-selection all
+```
+
 Note: local segment metrics skip segments that cross likely total-station loss/reacquisition gaps.
+
+Implementation structure:
+- Metric definitions/defaults are centralized in `mcap_extractor/metrics_definitions.py`.
+- Metric calculations are centralized in `mcap_extractor/metrics_calculations.py`.
+- `eval_metrics` and `visualize_metrics` import these shared modules.
 
 This generates:
 
@@ -175,13 +127,45 @@ This generates:
 output/<bag-name>/
 	plots/
 		metrics_viz/
-			all_aligned_xy.png
-			pair_<trajectory>_vs_<reference>.png
-			rpe_<trajectory>.png
-			rpe_map_delta10m_<trajectory>.png
-			rpe_timeseries_overlay_delta10m.png
-			rpe_boxplot_side_by_side_delta10m.png
-			distance_ratio_map_delta10m_<trajectory>.png
-			distance_ratio_timeseries_overlay_delta10m.png
-			distance_ratio_boxplot_side_by_side_delta10m.png
+			trajectories/
+				all_aligned_xy.png
+				pair_<trajectory>_vs_<reference>.png
+			rpe/
+				rpe_<trajectory>.png
+				delta_10m/
+					rpe_map_delta10m_<trajectory>.png
+					rpe_boxplot_delta10m.png
+			dte/
+				delta_10m/
+					dte_map_delta10m_<trajectory>.png
+					dte_boxplot_delta10m.png
+			distance_ratio/
+				delta_10m/
+					distance_ratio_map_delta10m_<trajectory>.png
+					distance_ratio_boxplot_delta10m.png
+			overlays/
+				delta_10m/
+					rpe_timeseries_overlay_delta10m.png
+					dte_timeseries_overlay_delta10m.png
+					distance_ratio_timeseries_overlay_delta10m.png
 ```
+
+## Command 6: Full Post-Processing Pipeline
+
+```bash
+cd /home/seva/repos/deg-tunnel-tools
+poetry run run_pipeline output/<bag-name>
+```
+
+Optional arguments:
+
+```bash
+poetry run run_pipeline output/<bag-name> --highlight-delta 10 --pair-selection non_intersecting
+poetry run run_pipeline output/<bag-name> --highlight-delta 10 --pair-selection all
+poetry run run_pipeline output/<bag-name> --show
+```
+
+The pipeline prints these main result paths in the terminal:
+- all trajectories aligned plot location
+- boxplot locations (RPE, DTE, distance ratio)
+- metrics summary JSON path

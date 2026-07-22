@@ -3,6 +3,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
 
+from mcap_extractor.plot_colors import build_color_map
+
 def load_tum(filepath):
     """Loads a TUM trajectory file and returns timestamps and x-y-z coordinates."""
     data = np.loadtxt(filepath)
@@ -28,7 +30,7 @@ def resolve_aligned_dir(folder_path):
     print(f"Error: could not find aligned trajectories in {folder_path}")
     sys.exit(1)
 
-def visualize_aligned(folder_path):
+def visualize_aligned(folder_path, show=True):
     aligned_dir = resolve_aligned_dir(folder_path)
 
     traj_files = sorted(aligned_dir.glob("*_aligned.txt"))
@@ -51,6 +53,8 @@ def visualize_aligned(folder_path):
     if ref_name not in trajectories:
         ref_name = list(trajectories.keys())[0]
 
+    color_map = build_color_map([name for name in trajectories if name != ref_name])
+
     _, ref_xyz = trajectories[ref_name]
 
     plt.figure(figsize=(10, 8))
@@ -60,8 +64,11 @@ def visualize_aligned(folder_path):
 
     for name, (_, xyz) in trajectories.items():
         xy = xyz[:, :2] - center
-        style = {'linewidth': 2, 'linestyle': '--', 'color': 'black'} if name == ref_name else {'alpha': 0.9}
-        plt.plot(xy[:, 0], xy[:, 1], label=name, **style)
+        if name == ref_name:
+            # Show known reference points explicitly instead of connecting with lines.
+            plt.scatter(xy[:, 0], xy[:, 1], s=7, color='black', alpha=0.45, label=name)
+        else:
+            plt.plot(xy[:, 0], xy[:, 1], color=color_map[name], alpha=0.9, label=name)
 
     plt.plot(0, 0, 'ro', markersize=8, label="Start Point (0,0)")
     plt.title("Saved Aligned Trajectories (XY)")
@@ -71,7 +78,10 @@ def visualize_aligned(folder_path):
     plt.grid(True)
     plt.axis('equal')
     plt.tight_layout()
-    plt.show()
+    if show:
+        plt.show()
+    else:
+        plt.close()
 
 
 def main():
@@ -79,7 +89,7 @@ def main():
         print("Usage: poetry run align_visualize <output_run_folder_or_aligned_folder>")
         sys.exit(1)
 
-    visualize_aligned(sys.argv[1])
+    visualize_aligned(sys.argv[1], show=True)
 
 if __name__ == "__main__":
     main()

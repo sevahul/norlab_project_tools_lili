@@ -10,8 +10,7 @@ dependencies = [
     "mcap (>=1.4.0,<2.0.0)",
     "mcap-ros2-support (>=0.5.7,<0.6.0)",
     "matplotlib (>=3.11.0,<4.0.0)",
-    "numpy (>=2.3.0,<3.0.0)",
-    "pyyaml (>=6.0.2,<7.0.0)"
+    "numpy (>=2.3.0,<3.0.0)"
 ]
 
 [project.scripts]
@@ -20,6 +19,7 @@ align_data = "mcap_extractor.align_save:main"
 eval_metrics = "mcap_extractor.evaluate_metrics:main"
 align_visualize = "mcap_extractor.align_visualize:main"
 visualize_metrics = "mcap_extractor.visualize_metrics:main"
+run_pipeline = "mcap_extractor.run_pipeline:main"
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]

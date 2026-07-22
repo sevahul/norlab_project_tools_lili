@@ -1,21 +1,22 @@
 trajectories:
   # t265:
   #   topic: /t265/odom/sample
-  # legged:
-  #   topic: /legged_odometry/pose_in_odom
-  # theodolite:
-  #   topic: /theodolite_data
-  #   type: theodolite
-  base_link_tf:
-    topic: /tf
-    type: tf_tree
-    child_frame: base
-    parent_frame: odom
+  #   reference: True
+  legged:
+    topic: /legged_odometry/pose_in_odom
+  theodolite:
+    topic: /theodolite_data
+    type: theodolite
+  # base_link_tf:
+  #   topic: /tf
+  #   type: tf_tree
+  #   child_frame: base
+  #   parent_frame: odom
 
 # Optional overrides:
 # output:
 #   folder: output/non-default
-# input: /path/to/file.mcap
+input: /home/seva/bags/26-07-16-deg-balls/ros1/run-slippage-L-shape_20260716_151759.mcap
 # trajectories:
 #   base_link_tf:
 #     topic: /tf
