@@ -9,6 +9,7 @@ DEFAULT_HIGHLIGHT_DELTA_METERS = 10.0
 PLOT_GROUP_DIRS = {
     "trajectories": "trajectories",
     "rpe": "rpe",
+    "late": "late",
     "dte": "dte",
     "distance_ratio": "distance_ratio",
     "overlays": "overlays",

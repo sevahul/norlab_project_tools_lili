@@ -74,14 +74,25 @@ def run_pipeline(run_folder, highlight_delta=DEFAULT_HIGHLIGHT_DELTA_METERS, pai
 
     boxplot_paths = [
         metrics_viz_dir / "rpe" / delta_dir / f"rpe_boxplot_delta{delta_token(highlight_delta)}m.png",
+        metrics_viz_dir / "late" / delta_dir / f"late_boxplot_delta{delta_token(highlight_delta)}m.png",
         metrics_viz_dir / "dte" / delta_dir / f"dte_boxplot_delta{delta_token(highlight_delta)}m.png",
         metrics_viz_dir / "distance_ratio" / delta_dir / f"distance_ratio_boxplot_delta{delta_token(highlight_delta)}m.png",
+    ]
+
+    timeseries_paths = [
+        metrics_viz_dir / "rpe" / delta_dir / f"rpe_timeseries_overlay_delta{delta_token(highlight_delta)}m.png",
+        metrics_viz_dir / "late" / delta_dir / f"late_timeseries_overlay_delta{delta_token(highlight_delta)}m.png",
+        metrics_viz_dir / "dte" / delta_dir / f"dte_timeseries_overlay_delta{delta_token(highlight_delta)}m.png",
+        metrics_viz_dir / "distance_ratio" / delta_dir / f"distance_ratio_timeseries_overlay_delta{delta_token(highlight_delta)}m.png",
     ]
 
     print("\nMain results")
     print(f"- All aligned trajectories plot: {all_aligned_plot_path}")
     print("- Boxplot locations:")
     for p in boxplot_paths:
+        print(f"  - {p}")
+    print("- Metrics-over-time plot locations:")
+    for p in timeseries_paths:
         print(f"  - {p}")
     print(f"- Metrics summary JSON: {metrics_summary_path}")
 

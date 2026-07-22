@@ -9,6 +9,7 @@ import numpy as np
 from mcap_extractor.metrics_calculations import (
     compute_local_distance_ratio_samples,
     compute_local_dte_samples,
+    compute_local_late_samples,
     compute_local_rpe_samples,
     cumulative_distance,
     ratio_to_dte,
@@ -55,7 +56,7 @@ def parse_args():
         "--highlight-delta",
         type=float,
         default=HIGHLIGHT_DELTA_METERS,
-        help="Delta in meters used for local RPE, DTE, and distance-ratio plots.",
+        help="Delta in meters used for local RPE/LATE/DTE/distance-ratio plots.",
     )
     parser.add_argument(
         "--pair-selection",
@@ -283,11 +284,29 @@ def add_info_box(ax, text):
     )
 
 
+def apply_percentile_y_limit(ax, values):
+    """Set y-axis upper limit to p95 + 10% of clipped range to reduce outlier impact."""
+    arr = np.asarray(values, dtype=float)
+    arr = arr[np.isfinite(arr)]
+    if arr.size == 0:
+        return
+
+    y_min = float(np.min(arr))
+    y_p95 = float(np.percentile(arr, 95))
+    span = max(1e-9, y_p95 - y_min)
+    y_max = y_p95 + 0.1 * span
+    if y_max <= y_min:
+        y_max = y_min + 1e-3
+
+    ax.set_ylim(y_min, y_max)
+
+
 def save_rpe_timeseries_overlay(rpe_series, delta_m, output_dir):
     if len(rpe_series) < 1:
         return None, None
 
     fig, ax = plt.subplots(figsize=(10, 5.5))
+    all_values = []
 
     for name in sorted(rpe_series.keys()):
         times = rpe_series[name]["times"]
@@ -297,6 +316,9 @@ def save_rpe_timeseries_overlay(rpe_series, delta_m, output_dir):
 
         t_rel = times - times[0]
         ax.plot(t_rel, errors_m, linewidth=1.4, color=plot_color(name), alpha=0.95, label=name)
+        all_values.extend(errors_m.tolist())
+
+    apply_percentile_y_limit(ax, all_values)
 
     ax.set_xlabel("Time from start [s]")
     ax.set_ylabel("Local RPE [m]")
@@ -487,6 +509,7 @@ def save_dte_timeseries_overlay(distance_series, delta_m, output_dir):
         return None, None
 
     fig, ax = plt.subplots(figsize=(10, 5.5))
+    all_values = []
 
     for name in sorted(distance_series.keys()):
         times = distance_series[name]["times"]
@@ -495,6 +518,9 @@ def save_dte_timeseries_overlay(distance_series, delta_m, output_dir):
             continue
         t_rel = times - times[0]
         ax.plot(t_rel, dte_values, linewidth=1.4, color=plot_color(name), alpha=0.95, label=name)
+        all_values.extend(dte_values.tolist())
+
+    apply_percentile_y_limit(ax, all_values)
 
     ax.set_xlabel("Time from start [s]")
     ax.set_ylabel("Local DTE |1-ratio| [-]")
@@ -515,6 +541,46 @@ def save_dte_timeseries_overlay(distance_series, delta_m, output_dir):
     fig.tight_layout()
 
     out_path = output_dir / f"dte_timeseries_overlay_delta{delta_token(delta_m)}m.png"
+    fig.savefig(out_path, dpi=180)
+    return fig, out_path
+
+
+def save_late_timeseries_overlay(late_series, delta_m, output_dir):
+    if len(late_series) < 1:
+        return None, None
+
+    fig, ax = plt.subplots(figsize=(10, 5.5))
+    all_values = []
+
+    for name in sorted(late_series.keys()):
+        times = late_series[name]["times"]
+        late_values = late_series[name]["late_values"]
+        if times.size == 0 or late_values.size == 0:
+            continue
+        t_rel = times - times[0]
+        ax.plot(t_rel, late_values, linewidth=1.4, color=plot_color(name), alpha=0.95, label=name)
+        all_values.extend(late_values.tolist())
+
+    apply_percentile_y_limit(ax, all_values)
+
+    ax.set_xlabel("Time from start [s]")
+    ax.set_ylabel("Local ATE (LATE) [m]")
+    ax.set_title(f"LATE Time Series Overlay (delta={delta_m:g} m)")
+    ax.grid(True)
+    ax.legend()
+
+    lines = []
+    for name in sorted(late_series.keys()):
+        m = late_series[name].get("median_late")
+        if m is None:
+            continue
+        lines.append(f"{name}: local~{m:.3f} m")
+    if lines:
+        add_info_box(ax, "\n".join(lines))
+
+    fig.tight_layout()
+
+    out_path = output_dir / f"late_timeseries_overlay_delta{delta_token(delta_m)}m.png"
     fig.savefig(out_path, dpi=180)
     return fig, out_path
 
@@ -549,6 +615,97 @@ def save_dte_boxplot_side_by_side(distance_series, delta_m, output_dir):
 
     fig.tight_layout()
     out_path = output_dir / f"dte_boxplot_delta{delta_token(delta_m)}m.png"
+    fig.savefig(out_path, dpi=180)
+    return fig, out_path
+
+
+def save_late_boxplot_side_by_side(late_series, delta_m, output_dir):
+    names = [name for name in sorted(late_series.keys()) if late_series[name].get("late_values", np.array([])).size > 0]
+    if len(names) < 1:
+        return None, None
+
+    data = [late_series[name]["late_values"] for name in names]
+    fig, ax = plt.subplots(figsize=(9, 5.5))
+    try:
+        box = ax.boxplot(data, tick_labels=names, patch_artist=True, showfliers=False)
+    except TypeError:
+        box = ax.boxplot(data, labels=names, patch_artist=True, showfliers=False)
+
+    for idx, patch in enumerate(box["boxes"]):
+        patch.set_facecolor(plot_color(names[idx]))
+        patch.set_alpha(0.55)
+
+    y_min, y_max = ax.get_ylim()
+    y_span = max(1e-9, y_max - y_min)
+    ax.set_ylim(y_min, y_max + 0.14 * y_span)
+    y_text = y_max + 0.04 * y_span
+    for idx, name in enumerate(names):
+        n_samples = int(late_series[name]["late_values"].size)
+        ax.text(idx + 1, y_text, f"n={n_samples}", ha="center", va="bottom", fontsize=8)
+
+    ax.set_ylabel("Local ATE (LATE) [m]")
+    ax.set_title(f"LATE Boxplots Side-by-Side (delta={delta_m:g} m)")
+    ax.grid(True, axis="y", alpha=0.35)
+
+    fig.tight_layout()
+    out_path = output_dir / f"late_boxplot_delta{delta_token(delta_m)}m.png"
+    fig.savefig(out_path, dpi=180)
+    return fig, out_path
+
+
+def save_spatial_late_plot(
+    reference_name,
+    reference_xyz,
+    estimate_name,
+    estimate_xyz,
+    starts_xy,
+    late_values,
+    delta_m,
+    output_dir,
+):
+    fig, ax = plt.subplots(figsize=(9, 7))
+
+    ref_start = reference_xyz[0, :2]
+    ref_xy = reference_xyz[:, :2] - ref_start
+    est_xy = estimate_xyz[:, :2] - ref_start
+    starts_xy_centered = starts_xy - ref_start
+
+    ax.scatter(ref_xy[:, 0], ref_xy[:, 1], color="black", s=7, alpha=0.45, label=reference_name)
+    ax.plot(est_xy[:, 0], est_xy[:, 1], linewidth=1.5, color=plot_color(estimate_name), alpha=0.55, label=estimate_name)
+
+    vmax = float(max(0.05, np.percentile(late_values, 95)))
+    scatter = ax.scatter(
+        starts_xy_centered[:, 0],
+        starts_xy_centered[:, 1],
+        c=late_values,
+        cmap="inferno",
+        vmin=0.0,
+        vmax=vmax,
+        s=22,
+        edgecolors="none",
+        label=f"LATE start points (delta={delta_m:g} m)",
+    )
+
+    cbar = fig.colorbar(scatter, ax=ax)
+    cbar.set_label("Local ATE (LATE) [m]")
+
+    ax.plot(0, 0, "ro", markersize=7, label="Reference start")
+    ax.set_title(f"Spatial LATE Map ({delta_m:g} m): {estimate_name}")
+    ax.set_xlabel("X [m]")
+    ax.set_ylabel("Y [m]")
+    ax.grid(True)
+    ax.axis("equal")
+    ax.legend()
+    add_info_box(
+        ax,
+        (
+            f"LATE median: {float(np.median(late_values)):.3f} m\n"
+            f"LATE p95: {float(np.percentile(late_values, 95)):.3f} m"
+        ),
+    )
+    fig.tight_layout()
+
+    out_path = output_dir / f"late_map_delta{delta_token(delta_m)}m_{sanitize_name(estimate_name)}.png"
     fig.savefig(out_path, dpi=180)
     return fig, out_path
 
@@ -617,6 +774,7 @@ def save_distance_ratio_timeseries_overlay(ratio_series, delta_m, output_dir):
         return None, None
 
     fig, ax = plt.subplots(figsize=(10, 5.5))
+    all_values = []
 
     for name in sorted(ratio_series.keys()):
         times = ratio_series[name]["times"]
@@ -625,6 +783,9 @@ def save_distance_ratio_timeseries_overlay(ratio_series, delta_m, output_dir):
             continue
         t_rel = times - times[0]
         ax.plot(t_rel, ratio_values, linewidth=1.4, color=plot_color(name), alpha=0.95, label=name)
+        all_values.extend(ratio_values.tolist())
+
+    apply_percentile_y_limit(ax, all_values)
 
     ax.axhline(1.0, color="gray", linestyle="--", linewidth=1.0)
     ax.set_xlabel("Time from start [s]")
@@ -707,7 +868,7 @@ def ensure_delta_plot_dirs(plot_dirs, delta_m):
     """Create per-delta subfolders for delta-dependent plot families."""
     delta_dir = delta_subdir_name(delta_m)
     delta_dirs = {}
-    for key in ["rpe", "dte", "distance_ratio", "overlays"]:
+    for key in ["rpe", "late", "dte", "distance_ratio", "overlays"]:
         p = plot_dirs[key] / delta_dir
         p.mkdir(parents=True, exist_ok=True)
         delta_dirs[key] = p
@@ -819,6 +980,7 @@ def run(run_folder, show_figures=False, highlight_delta=HIGHLIGHT_DELTA_METERS, 
 
     figures = []
     rpe_series = {}
+    late_series = {}
     dte_series = {}
     ratio_series = {}
 
@@ -897,6 +1059,18 @@ def run(run_folder, show_figures=False, highlight_delta=HIGHLIGHT_DELTA_METERS, 
             print(f"Warning: no local DTE samples found for {name} at delta={highlight_delta:g}m.")
             continue
 
+        starts_xy_late, late_values, late_times = compute_local_late_samples(
+            ref_ts_sync,
+            ref_sync,
+            est_sync,
+            highlight_delta,
+            invalid_prefix=invalid_prefix,
+            pair_selection=pair_selection,
+        )
+        if late_values.size == 0:
+            print(f"Warning: no local LATE samples found for {name} at delta={highlight_delta:g}m.")
+            continue
+
         local_ratio_median = float(np.median(ratio_values))
         local_dte_median = float(np.median(dte_values))
         global_dte = ratio_to_dte(global_ratio)
@@ -930,6 +1104,12 @@ def run(run_folder, show_figures=False, highlight_delta=HIGHLIGHT_DELTA_METERS, 
             "dte_values": dte_values,
             "global_dte": global_dte,
             "median_dte": local_dte_median,
+        }
+
+        late_series[name] = {
+            "times": late_times,
+            "late_values": late_values,
+            "median_late": float(np.median(late_values)),
         }
 
         ratio_series[name] = {
@@ -972,6 +1152,19 @@ def run(run_folder, show_figures=False, highlight_delta=HIGHLIGHT_DELTA_METERS, 
         figures.append(fig_ratio_map)
         print(f"Saved: {path_ratio_map}")
 
+        fig_late_map, path_late_map = save_spatial_late_plot(
+            reference_name,
+            ref_sync,
+            name,
+            est_sync,
+            starts_xy_late,
+            late_values,
+            highlight_delta,
+            delta_plot_dirs["late"],
+        )
+        figures.append(fig_late_map)
+        print(f"Saved: {path_late_map}")
+
         fig_dr_map, path_dr_map = save_spatial_distance_ratio_plot(
             reference_name,
             ref_sync,
@@ -987,7 +1180,7 @@ def run(run_folder, show_figures=False, highlight_delta=HIGHLIGHT_DELTA_METERS, 
         figures.append(fig_dr_map)
         print(f"Saved: {path_dr_map}")
 
-    fig_ts, path_ts = save_rpe_timeseries_overlay(rpe_series, highlight_delta, delta_plot_dirs["overlays"])
+    fig_ts, path_ts = save_rpe_timeseries_overlay(rpe_series, highlight_delta, delta_plot_dirs["rpe"])
     if fig_ts is not None:
         figures.append(fig_ts)
         print(f"Saved: {path_ts}")
@@ -997,7 +1190,17 @@ def run(run_folder, show_figures=False, highlight_delta=HIGHLIGHT_DELTA_METERS, 
         figures.append(fig_box)
         print(f"Saved: {path_box}")
 
-    fig_ratio_ts, path_ratio_ts = save_dte_timeseries_overlay(dte_series, highlight_delta, delta_plot_dirs["overlays"])
+    fig_late_ts, path_late_ts = save_late_timeseries_overlay(late_series, highlight_delta, delta_plot_dirs["late"])
+    if fig_late_ts is not None:
+        figures.append(fig_late_ts)
+        print(f"Saved: {path_late_ts}")
+
+    fig_late_box, path_late_box = save_late_boxplot_side_by_side(late_series, highlight_delta, delta_plot_dirs["late"])
+    if fig_late_box is not None:
+        figures.append(fig_late_box)
+        print(f"Saved: {path_late_box}")
+
+    fig_ratio_ts, path_ratio_ts = save_dte_timeseries_overlay(dte_series, highlight_delta, delta_plot_dirs["dte"])
     if fig_ratio_ts is not None:
         figures.append(fig_ratio_ts)
         print(f"Saved: {path_ratio_ts}")
@@ -1007,7 +1210,7 @@ def run(run_folder, show_figures=False, highlight_delta=HIGHLIGHT_DELTA_METERS, 
         figures.append(fig_ratio_box)
         print(f"Saved: {path_ratio_box}")
 
-    fig_dr_ts, path_dr_ts = save_distance_ratio_timeseries_overlay(ratio_series, highlight_delta, delta_plot_dirs["overlays"])
+    fig_dr_ts, path_dr_ts = save_distance_ratio_timeseries_overlay(ratio_series, highlight_delta, delta_plot_dirs["distance_ratio"])
     if fig_dr_ts is not None:
         figures.append(fig_dr_ts)
         print(f"Saved: {path_dr_ts}")

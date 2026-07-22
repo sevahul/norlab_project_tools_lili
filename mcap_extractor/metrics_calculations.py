@@ -37,6 +37,20 @@ def compute_ate_rmse(ref_xyz, est_xyz):
     return rmse(errors), errors
 
 
+def get_best_rotation_2d(ref_xy, est_xy):
+    """Return the 2D rotation matrix that best aligns est_xy to ref_xy."""
+    h = est_xy.T @ ref_xy
+    u, _, vt = np.linalg.svd(h)
+    r = vt.T @ u.T
+
+    # Enforce proper rotation (det = +1), no reflection.
+    if np.linalg.det(r) < 0:
+        vt[1, :] *= -1
+        r = vt.T @ u.T
+
+    return r
+
+
 def cumulative_distance(positions):
     if len(positions) < 2:
         return np.zeros((len(positions),), dtype=float)
@@ -210,3 +224,54 @@ def compute_local_distance_ratio_samples(ref_ts, ref_xyz, est_xyz, delta_m, inva
         return np.array([]), np.array([]), np.array([])
 
     return np.array(starts_xy), np.array(ratio_values), np.array(start_times)
+
+
+def compute_local_late_samples(ref_ts, ref_xyz, est_xyz, delta_m, invalid_prefix=None, pair_selection="non_intersecting"):
+    """Compute Local ATE (LATE) over intervals after local rigid alignment.
+
+    For each interval [i, j], estimate and reference segments are aligned by
+    start translation and best-fit 2D rotation (XY), then interval ATE RMSE is
+    computed using compute_ate_rmse.
+    """
+    if len(ref_xyz) < 2:
+        return np.array([]), np.array([]), np.array([])
+
+    s_ref = cumulative_distance(ref_xyz)
+    starts_xy = []
+    late_values = []
+    start_times = []
+
+    for i, j in iter_delta_pairs(s_ref, delta_m, pair_selection):
+
+        if invalid_prefix is not None and (invalid_prefix[j] - invalid_prefix[i]) > 0:
+            continue
+
+        ref_seg = ref_xyz[i : j + 1]
+        est_seg = est_xyz[i : j + 1]
+        if ref_seg.shape[0] < 2 or est_seg.shape[0] < 2:
+            continue
+
+        # Local start alignment + best-fit XY rotation.
+        ref_xy = ref_seg[:, :2]
+        est_xy = est_seg[:, :2]
+
+        ref_xy_rel = ref_xy - ref_xy[0]
+        est_xy_rel = est_xy - est_xy[0]
+
+        r2d = get_best_rotation_2d(ref_xy_rel, est_xy_rel)
+        est_xy_aligned = (est_xy_rel @ r2d.T) + ref_xy[0]
+
+        # Keep Z aligned by start translation only.
+        est_z_aligned = (est_seg[:, 2:3] - est_seg[0, 2:3]) + ref_seg[0, 2:3]
+        est_seg_aligned = np.column_stack((est_xy_aligned, est_z_aligned))
+
+        late_rmse, _ = compute_ate_rmse(ref_seg, est_seg_aligned)
+
+        starts_xy.append(est_xyz[i, :2])
+        late_values.append(late_rmse)
+        start_times.append(ref_ts[i])
+
+    if not late_values:
+        return np.array([]), np.array([]), np.array([])
+
+    return np.array(starts_xy), np.array(late_values), np.array(start_times)

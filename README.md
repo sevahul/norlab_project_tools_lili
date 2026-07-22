@@ -101,7 +101,7 @@ Optional interactive display:
 poetry run visualize_metrics output/<bag-name> --show
 ```
 
-Optional local-metrics delta in meters (RPE/DTE/distance-ratio):
+Optional local-metrics delta in meters (RPE/LATE/DTE/distance-ratio):
 
 ```bash
 poetry run visualize_metrics output/<bag-name> --highlight-delta 10
@@ -135,19 +135,24 @@ output/<bag-name>/
 				delta_10m/
 					rpe_map_delta10m_<trajectory>.png
 					rpe_boxplot_delta10m.png
+					rpe_timeseries_overlay_delta10m.png
+			late/
+				delta_10m/
+					late_map_delta10m_<trajectory>.png
+					late_boxplot_delta10m.png
+					late_timeseries_overlay_delta10m.png
 			dte/
 				delta_10m/
 					dte_map_delta10m_<trajectory>.png
 					dte_boxplot_delta10m.png
+					dte_timeseries_overlay_delta10m.png
 			distance_ratio/
 				delta_10m/
 					distance_ratio_map_delta10m_<trajectory>.png
 					distance_ratio_boxplot_delta10m.png
+					distance_ratio_timeseries_overlay_delta10m.png
 			overlays/
 				delta_10m/
-					rpe_timeseries_overlay_delta10m.png
-					dte_timeseries_overlay_delta10m.png
-					distance_ratio_timeseries_overlay_delta10m.png
 ```
 
 ## Command 6: Full Post-Processing Pipeline
@@ -167,5 +172,5 @@ poetry run run_pipeline output/<bag-name> --show
 
 The pipeline prints these main result paths in the terminal:
 - all trajectories aligned plot location
-- boxplot locations (RPE, DTE, distance ratio)
+- boxplot locations (RPE, LATE, DTE, distance ratio)
 - metrics summary JSON path
